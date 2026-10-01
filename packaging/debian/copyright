@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: lion-greeter
+Source: https://github.com/lionos-org/lion-greeter
+
+Files: *
+Copyright: 2026 LionOS Project
+License: MIT
+ License text is in the repository root (LICENSE-MIT embedded in
+ Cargo.toml metadata) and reproduced in
+ /usr/share/doc/lion-greeter/copyright.

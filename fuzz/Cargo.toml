@@ -1,0 +1,22 @@
+[package]
+name = "lion-greeter-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lion_greeter = { path = ".." }
+
+[[bin]]
+name = "parse_config"
+path = "fuzz_targets/parse_config.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

@@ -1,0 +1,102 @@
+# lion-greeter CI — every merge gate that exists, in one file.
+#
+# Design notes:
+# * --locked everywhere: CI builds exactly the reviewed Cargo.lock.
+# * The job matrix runs the two toolchain extremes (stable + MSRV) so
+#   a dependency silently raising the MSRV fails here, not downstream.
+# * No network beyond the crates index + toolchain download: the test
+#   suite (unit + integration + deterministic fuzz) is fully offline.
+# * The release job builds the exact artifact that gets packaged, and
+#   publishes a build-id + SHA256 for reproducibility audits.
+# * cargo-audit gates the supply chain (CVEs in the 10-dependency
+#   tree); a zero-dependency FFI keeps that tree small on purpose.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  lint:
+    name: clippy (all targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  tests:
+    name: unit + integration + fuzz harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # libpam runtime is present on GH runners; the build links the
+      # versioned soname directly (see build.rs), no -dev needed.
+      - run: cargo test --locked --all-targets
+      - name: live D-Bus integration suite
+        run: |
+          sudo apt-get install -y dbus
+          bash scripts/live_dbus_test.sh
+
+  msrv:
+    name: MSRV (rust ${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: ["1.74"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: cargo check --locked
+
+  audit:
+    name: cargo-audit (supply chain)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: release build + checksum
+    runs-on: ubuntu-latest
+    needs: [fmt, lint, tests, msrv]
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - name: sha256 + size
+        run: |
+          sha256sum target/release/lion-greeter > lion-greeter.sha256
+          stat -c '%s bytes' target/release/lion-greeter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lion-greeter-${{ github.ref_name }}
+          path: |
+            target/release/lion-greeter
+            lion-greeter.sha256

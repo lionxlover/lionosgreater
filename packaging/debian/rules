@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+# debian/rules for lion-greeter.
+# The crate does its own LTO/strip in [profile.release]; dh does not
+# need to duplicate it.
+
+export DEB_BUILD_OPTIONS = terse
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	dh_auto_build -- build --release --frozen
+
+override_dh_auto_test:
+	dh_auto_test -- test --frozen --all-targets
+
+override_dh_auto_install:
+	install -Dm755 target/release/lion-greeter debian/lion-greeter/usr/bin/lion-greeter
+	install -Dm644 lion-greeter.service \
+		debian/lion-greeter/lib/systemd/system/lion-greeter.service
+	install -Dm644 dbus-1/org.lionos.Greeter.conf \
+		debian/lion-greeter/usr/share/dbus-1/system.d/org.lionos.Greeter.conf
+	install -Dm644 pam.d/lion-greeter debian/lion-greeter/etc/pam.d/lion-greeter
+	install -Dm644 pam.d/lion-greeter-autologin \
+		debian/lion-greeter/etc/pam.d/lion-greeter-autologin
+	install -Dm644 etc/lionos/greeter.toml.example \
+		debian/lion-greeter/usr/share/lion-greeter/greeter.toml.example
+	install -dm755 debian/lion-greeter/var/lib/lion-greeter

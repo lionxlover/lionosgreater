@@ -1,0 +1,30 @@
+#%PAM-1.0
+# LionOS greeter PAM stack.
+#
+# Common Debian/Ubuntu stacks (pam_unix/sssd, pam_faildelay, pam_systemd,
+# pam_env, limits, etc.) all come from the common-* includes. Adjust
+# locally if LionOS ships a different distro base.
+#
+# Module order:
+#   1. pam_nologin (auth)        — hard-fail if /etc/nologin exists.
+#   2. common-auth                — actual password check (pam_unix, etc.)
+#   3. pam_nologin (account)     — same gate, account phase.
+#   4. common-account            — expiry / lockout checks.
+#   5. pam_loginuid (session)    — set the audit loginuid.
+#   6. common-session             — pam_systemd registers a logind session
+#                                  (XDG_SESSION_ID, XDG_RUNTIME_DIR, ...)
+#   7. pam_keyinit force revoke   — per-user session keyring.
+#
+# `pam_faildelay` is pulled in via `common-auth` and stretches the
+# response time of failed logins so timing attacks cannot distinguish
+# "user not found" from "wrong password". The lion-greeter daemon
+# independently enforces a 600ms minimum-failure-latency and a per-user
+# doubling throttle (see src/throttle.rs) — these stack with PAM's own
+# delay, they don't replace it.
+auth      requisite  pam_nologin.so
+@include common-auth
+account   required   pam_nologin.so
+@include common-account
+session   required   pam_loginuid.so
+@include common-session
+session   optional   pam_keyinit.so force revoke

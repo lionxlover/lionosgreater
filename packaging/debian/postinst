@@ -1,0 +1,24 @@
+#!/bin/sh
+# postinst for lion-greeter: enable the service, sanity-check the PAM
+# stack, and leave a note if the D-Bus policy needs a daemon reload.
+set -e
+
+case "$1" in
+    configure)
+        # Verify the PAM stack loads before we claim to work: this is
+        # the exact probe `lion-greeter --check-pam` runs. A failure
+        # here is a packaging bug (missing module), not a user error.
+        if command -v lion-greeter >/dev/null 2>&1; then
+            if ! lion-greeter --check-pam; then
+                echo "lion-greeter: PAM stack probe FAILED — check /etc/pam.d/lion-greeter" >&2
+            fi
+        fi
+        # D-Bus policy files are re-read on SIGHUP; do it if possible.
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl kill -s HUP dbus.service >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

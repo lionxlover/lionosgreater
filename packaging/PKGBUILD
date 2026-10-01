@@ -1,0 +1,58 @@
+# PKGBUILD for lion-greeter — Arch Linux / pacman packaging.
+# Build:  makepkg -si
+# This file is maintained in-repo so the AUR package and the source
+# tree can never drift apart.
+
+pkgname=lion-greeter
+pkgver=0.6.0
+pkgrel=1
+pkgdesc="LionOS login daemon: PAM authentication (conversation-forwarding, autologin), XDG session selection, logind user switching"
+arch=('x86_64' 'aarch64')
+url="https://lionos.org/"
+license=('MIT')
+depends=('dbus' 'pam')
+makedepends=('cargo')
+options=('!lto')  # the project does its own fat-LTO in profile.release
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')  # release tarball checksums are published per release
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTFLAGS=""
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --frozen --all-targets
+    # Live D-Bus suite requires a user session bus; run it in a
+    # throwaway dbus-daemon:
+    bash scripts/live_dbus_test.sh
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    # Binary
+    install -Dm755 target/release/lion-greeter "$pkgdir/usr/bin/lion-greeter"
+    # systemd unit
+    install -Dm644 lion-greeter.service "$pkgdir/usr/lib/systemd/system/lion-greeter.service"
+    # D-Bus policy (restricts org.lionos.Greeter1 to the lion-login user)
+    install -Dm644 dbus-1/org.lionos.Greeter.conf "$pkgdir/usr/share/dbus-1/system.d/org.lionos.Greeter.conf"
+    # PAM stacks (interactive + autologin)
+    install -Dm644 pam.d/lion-greeter "$pkgdir/etc/pam.d/lion-greeter"
+    install -Dm644 pam.d/lion-greeter-autologin "$pkgdir/etc/pam.d/lion-greeter-autologin"
+    # Example config (installed as .pacnew-safe default)
+    install -Dm644 etc/lionos/greeter.toml.example "$pkgdir/usr/share/lion-greeter/greeter.toml.example"
+    # State directory
+    install -dm755 "$pkgdir/var/lib/lion-greeter"
+    # Docs
+    install -Dm644 README.md "$pkgdir/usr/share/doc/lion-greeter/README.md"
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/lion-greeter/CHANGELOG.md"
+    install -Dm644 STABILITY.md "$pkgdir/usr/share/doc/lion-greeter/STABILITY.md"
+    install -Dm644 SECURITY.md "$pkgdir/usr/share/doc/lion-greeter/SECURITY.md"
+}

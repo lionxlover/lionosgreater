@@ -1,0 +1,19 @@
+Source: lion-greeter
+Section: admin
+Priority: optional
+Maintainer: LionOS Project <packaging@lionos.org>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libdbus-1-dev, pkg-config, dbus
+Standards-Version: 4.6.2
+Homepage: https://lionos.org/
+Vcs-Git: https://github.com/lionos-org/lion-greeter.git
+
+Package: lion-greeter
+Architecture: linux-any
+Depends: ${misc:Depends}, ${shlibs:Depends}, dbus, libpam-runtime
+Description: LionOS login daemon
+ PAM authentication daemon for the LionOS login UI, with live
+ second-factor prompt forwarding (2FA / security keys / smartcards),
+ configurable autologin, XDG session selection, and logind-based fast
+ user switching. Exposes a versioned, capability-flagged D-Bus API
+ (org.lionos.Greeter1) reachable only by the unprivileged lion-login
+ account. Zero heavy build dependencies (no bindgen/libclang).
