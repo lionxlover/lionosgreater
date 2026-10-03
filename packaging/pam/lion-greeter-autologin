@@ -1,0 +1,11 @@
+# PAM stack for lion-greeter autologin / timed login (spec 01 §3).
+#
+# Passwordless by design: a user is only permitted if an administrator
+# put them in the `lion-autologin` group. The daemon fails closed when
+# this stack is missing or denies — autologin never bypasses PAM policy.
+# Keep this file root-owned 0644.
+
+auth      required   pam_succeed_if.so user ingroup lion-autologin
+auth      optional   pam_gnome_keyring.so
+account   required   pam_succeed_if.so user ingroup lion-autologin
+account   optional   pam_systemd.so

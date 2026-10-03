@@ -1,4 +1,0 @@
-usr/bin/lion-greeter
-usr/share/dbus-1/system.d/org.lionos.Greeter.conf
-usr/share/lion-greeter/greeter.toml.example
-var/lib/lion-greeter

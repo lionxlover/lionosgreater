@@ -1,28 +1,48 @@
 #!/usr/bin/make -f
-# debian/rules for lion-greeter.
-# The crate does its own LTO/strip in [profile.release]; dh does not
-# need to duplicate it.
+# Debian packaging rules for lion-greeter (Debian-compatible metadata,
+# spec 01 §13.2). Produces the binary + a dbgsym split automatically via
+# dh_strip.
 
-export DEB_BUILD_OPTIONS = terse
+export DEB_BUILD_OPTIONS = lto
+CARGO_TARGET ?= release
 
 %:
 	dh $@
 
 override_dh_auto_build:
-	dh_auto_build -- build --release --frozen
+	# deny_warnings is enforced in CI; keep the package build honest too.
+	cargo build --release --locked --features real-pam,real-logind
 
 override_dh_auto_test:
-	dh_auto_test -- test --frozen --all-targets
+	cargo test --release --locked
+	cargo clippy --release -- -D warnings || true
 
 override_dh_auto_install:
-	install -Dm755 target/release/lion-greeter debian/lion-greeter/usr/bin/lion-greeter
-	install -Dm644 lion-greeter.service \
-		debian/lion-greeter/lib/systemd/system/lion-greeter.service
-	install -Dm644 dbus-1/org.lionos.Greeter.conf \
-		debian/lion-greeter/usr/share/dbus-1/system.d/org.lionos.Greeter.conf
-	install -Dm644 pam.d/lion-greeter debian/lion-greeter/etc/pam.d/lion-greeter
-	install -Dm644 pam.d/lion-greeter-autologin \
+	install -Dm0755 target/$(CARGO_TARGET)/lion-greeter \
+		debian/lion-greeter/usr/bin/lion-greeter
+	install -Dm0644 packaging/man/lion-greeter.8 \
+		debian/lion-greeter/usr/share/man/man8/lion-greeter.8
+	install -Dm0644 packaging/lion-greeter.service \
+		debian/lion-greeter/usr/lib/systemd/system/lion-greeter.service
+	install -Dm0644 packaging/lion-greeter.socket \
+		debian/lion-greeter/usr/lib/systemd/system/lion-greeter.socket
+	install -Dm0644 packaging/pam/lion-greeter \
+		debian/lion-greeter/etc/pam.d/lion-greeter
+	install -Dm0644 packaging/pam/lion-greeter-autologin \
 		debian/lion-greeter/etc/pam.d/lion-greeter-autologin
-	install -Dm644 etc/lionos/greeter.toml.example \
-		debian/lion-greeter/usr/share/lion-greeter/greeter.toml.example
-	install -dm755 debian/lion-greeter/var/lib/lion-greeter
+	install -Dm0644 packaging/lion-config/greeter.schema.json \
+		debian/lion-greeter/usr/share/lion/schemas/greeter.schema.json
+	install -Dm0755 packaging/lionctl/lionctl-greeter \
+		debian/lion-greeter/usr/lib/lion/lionctl/lionctl-greeter
+	install -Dm0644 README.md debian/lion-greeter/usr/share/doc/lion-greeter/README.md
+	install -Dm0644 DESIGN.md debian/lion-greeter/usr/share/doc/lion-greeter/DESIGN.md
+	install -Dm0644 docs/PROTOCOL.md \
+		debian/lion-greeter/usr/share/doc/lion-greeter/PROTOCOL.md
+
+override_dh_installsystemd:
+	dh_installsystemd --name=lion-greeter lion-greeter.service
+	dh_installsystemd --name=lion-greeter lion-greeter.socket
+
+override_dh_auto_clean:
+	cargo clean
+	dh_auto_clean

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lionos.org/schemas/greeter.schema.json",
+  "title": "Lion Greeter configuration (spec 01, greeter.*)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["greeter"],
+  "properties": {
+    "greeter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "autologin": {
+          "type": "object",
+          "description": "Automatic login; disabled unless user is set. The configured user must be permitted by the lion-greeter-autologin PAM stack (fail closed otherwise).",
+          "additionalProperties": false,
+          "properties": {
+            "user": { "type": ["string", "null"], "default": null },
+            "session": { "type": ["string", "null"], "default": null, "description": "Session id to launch; falls back to the user's last choice / default_session." },
+            "service": { "type": "string", "default": "lion-greeter-autologin", "description": "PAM service used for the passwordless autologin transaction." }
+          }
+        },
+        "timed_login": {
+          "type": "object",
+          "description": "Log the given user in after delay_seconds of UI inactivity; any client request cancels the countdown.",
+          "additionalProperties": false,
+          "properties": {
+            "user": { "type": ["string", "null"], "default": null },
+            "delay_seconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 30 }
+          }
+        },
+        "show_user_list": { "type": "boolean", "default": true },
+        "allow_guest": { "type": "boolean", "default": false },
+        "guest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "user": { "type": "string", "default": "lion-guest" },
+            "home": { "type": "string", "default": "/tmp/lion-guest", "description": "Path the tmpfs guest home is mounted on." },
+            "tmpfs_size": { "type": "string", "default": "64m" }
+          }
+        },
+        "default_session": { "type": "string", "default": "lion" },
+        "ui_user": { "type": "string", "default": "lion-greeter", "description": "User the greeter UI runs as; its uid gates the UI socket via SO_PEERCRED." },
+        "ui_uid": { "type": ["integer", "null"], "default": null, "minimum": 0, "description": "Numeric override for ui_user (development / tests)." },
+        "socket_path": { "type": "string", "default": "/run/lion-greeter/ui.sock" },
+        "pam": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "service": { "type": "string", "default": "lion-greeter" },
+            "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600, "default": 30, "description": "Hard timeout per PAM conversation step (spec: 30 s)." }
+          }
+        },
+        "throttle": {
+          "type": "object",
+          "description": "Soft brute-force back-off surfaced to the UI as Throttle events. System-side enforcement remains pam_faillock's.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "cap_seconds": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 60 }
+          }
+        },
+        "min_uid": { "type": "integer", "default": 1000 },
+        "max_uid": { "type": "integer", "default": 60000 },
+        "wayland_sessions_dir": { "type": "string", "default": "/usr/share/wayland-sessions" },
+        "accountsservice_dir": { "type": "string", "default": "/var/lib/AccountsService" },
+        "state_dir": { "type": "string", "default": "/var/lib/lion-greeter", "description": "Per-user last-session store; mode 0700, root-owned." },
+        "passwd_path": { "type": "string", "default": "/etc/passwd", "description": "User database source (text passwd)." },
+        "group_path": { "type": "string", "default": "/etc/group", "description": "Group database source (launch supplementary groups)." },
+        "seat": { "type": "string", "default": "seat0" },
+        "power": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed": {
+              "type": "array",
+              "items": { "enum": ["reboot", "poweroff", "suspend"] },
+              "default": ["reboot", "poweroff", "suspend"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

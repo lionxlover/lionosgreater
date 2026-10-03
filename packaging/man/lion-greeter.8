@@ -1,0 +1,91 @@
+.\" Manual page for lion-greeter (spec 01 §9 deliverable).
+.\" roff source; install as /usr/share/man/man8/lion-greeter.8
+.TH LION-GREETER 8 "2026" "LionOS" "System Administration"
+.SH NAME
+lion-greeter \- LionOS login backend: user enumeration, PAM authentication, session launch
+.SH SYNOPSIS
+.B lion-greeter
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B lion-greeter
+is the privileged login backend of LionOS (spec 01). It owns user
+enumeration, PAM authentication and session launch. It never draws
+anything; the unprivileged \fIlion-login-ui\fR component renders the
+greeter and talks to the daemon over a
+.BR SO_PEERCRED Ns -gated
+local unix socket (\fI/run/lion-greeter/ui.sock\fR) using a versioned
+JSON-lines protocol (proto 1). See
+.BR docs/PROTOCOL.md (in the source package)
+for the wire format.
+.PP
+The daemon speaks PAM through a runtime-loaded \fIlibpam\fR and
+supports full conversations: passwords, expired-password change flows,
+multi-step prompts (OTP/TOTP), and faillock-style lock-outs surfaced to
+the UI as countdowns. Secrets are zeroized immediately after use and are
+never logged or serialized.
+.PP
+Successful authentication registers a
+.BR logind (1)
+session and execs
+.BR lion-session (1)
+as the user with a clean XDG environment. Guest sessions run from a
+tmpfs home. Autologin and timed login are configuration-driven and
+fail closed unless the dedicated PAM stack permits them.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIPATH\fR
+Configuration file (default \fI/etc/lion/greeter.json\fR; the
+.B LION_GREETER_CONFIG
+environment variable is honoured).
+.TP
+.B \-\-check-config
+Load and validate the configuration, verify the PAM backend loads, and
+exit non-zero on any problem.
+.TP
+.B \-\-print-schema
+Print the lion-config JSON schema shipped with the package.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-v ", " \-\-verbose
+Debug logging.
+.SH SIGNALS
+.TP
+.B SIGTERM
+Graceful shutdown: \fBSTOPPING=1\fR notification, active authentication
+aborted and wiped, socket removed.
+.TP
+.B SIGHUP
+Reload configuration atomically without dropping connected clients.
+.SH ENVIRONMENT
+.TP
+.B LION_GREETER_LOG
+tracing filter (default \fIinfo\fR).
+.TP
+.B NOTIFY_SOCKET, WATCHDOG_USEC, LISTEN_FDS
+consumed per \fBsd_notify\fR(3) and \fBsd_listen_fds\fR(3) under systemd.
+.SH FILES
+.TP
+.I /etc/lion/greeter.json
+Configuration.
+.TP
+.I /run/lion-greeter/ui.sock
+UI protocol socket (mode 0660, group \fIlion-greeter\fR).
+.TP
+.I /var/lib/lion-greeter/last-session/
+Per-user remembered session choice.
+.TP
+.I /etc/pam.d/lion-greeter
+PAM stack for password conversations.
+.TP
+.I /etc/pam.d/lion-greeter-autologin
+PAM stack gating autologin (lion-autologin group).
+.SH SEE ALSO
+.BR lionctl (1),
+.BR lion-session (1),
+.BR systemd (1),
+.BR pam (8),
+.BR pam_faillock (8)
+.SH BUGS
+Report bugs at the LionOS tracker: https://git.lionos.org/lion-greeter

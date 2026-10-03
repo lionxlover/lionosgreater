@@ -1,140 +1,204 @@
-//! Per-user brute-force backoff. Failures 1-2 are free; after that the
-//! lockout doubles (2s, 4s, ... capped at 60s). The remaining time is
-//! reported to the UI so it can show a countdown instead of a dead form.
+#![forbid(unsafe_code)]
+//! Brute-force back-off (spec 01 §3: "exponential back-off per user and per
+//! TTY, delegated to pam_faillock but surfaced to the UI as a countdown").
+//!
+//! Scope of this module: the *soft*, greeter-side layer — exponential
+//! per-user lock-out computed from observed failures, surfaced as
+//! `Throttle{seconds}` events so the UI can show a countdown. Hard,
+//! system-side enforcement stays with `pam_faillock` (see
+//! `packaging/pam/lion-greeter`); the greeter never assumes it is the only
+//! line of defence.
+//!
+//! "Per TTY" maps to the connected UI client: failures are also counted per
+//! peer uid, so a misbehaving UI instance cannot pivot lock-out onto other
+//! users' attempts indefinitely.
 
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
-const FREE_ATTEMPTS: u32 = 2;
-const MAX_LOCKOUT: Duration = Duration::from_secs(60);
-const MAX_TRACKED: usize = 256;
-
-/// Key used for every name that is not an eligible account, so probing
-/// random usernames neither grows memory nor reveals which names exist.
-pub const UNKNOWN_KEY: &str = "\0unknown";
-
-#[derive(Default)]
+/// Failure counter with exponential lock-out for one key (user or peer uid).
+#[derive(Debug, Clone)]
 struct Entry {
-    fails: u32,
+    failures: u32,
     locked_until: Option<Instant>,
 }
 
-#[derive(Default)]
+impl Entry {
+    fn lockout_secs(&self, cap: Duration) -> u64 {
+        if self.failures == 0 {
+            return 0;
+        }
+        // Exponential: first failure → 1 s, then doubling, hard-capped.
+        // System-side enforcement remains pam_faillock's; this is the soft,
+        // user-visible layer.
+        let shift = self.failures.saturating_sub(1).min(16);
+        let secs = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
+        secs.min(cap.as_secs())
+    }
+}
+
+/// Per-user (and per-peer) back-off tracker.
 pub struct Throttle {
-    map: HashMap<String, Entry>,
+    entries: HashMap<String, Entry>,
+    cap: Duration,
+    enabled: bool,
+    now: Box<dyn Fn() -> Instant + Send + Sync>,
 }
 
 impl Throttle {
-    /// Time left before `user` may try again, if locked out.
-    pub fn remaining(&self, user: &str) -> Option<Duration> {
-        let until = self.map.get(user)?.locked_until?;
-        until
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())
-    }
-
-    /// Record a failure; returns the lockout now in force (zero if none).
-    pub fn record_failure(&mut self, user: &str) -> Duration {
-        if self.map.len() >= MAX_TRACKED && !self.map.contains_key(user) {
-            self.map
-                .retain(|_, e| e.locked_until.is_some_and(|t| t > Instant::now()));
+    pub fn new(enabled: bool, cap: Duration) -> Self {
+        Throttle {
+            entries: HashMap::new(),
+            cap,
+            enabled,
+            now: Box::new(Instant::now),
         }
-        let e = self.map.entry(user.to_owned()).or_default();
-        e.fails = e.fails.saturating_add(1);
-        if e.fails <= FREE_ATTEMPTS {
-            return Duration::ZERO;
+    }
+
+    /// Test seam: injectable clock.
+    #[cfg(test)]
+    pub fn with_clock(self, f: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        Throttle {
+            now: Box::new(f),
+            ..self
         }
-        let secs = 2u64.saturating_pow((e.fails - FREE_ATTEMPTS).min(6));
-        let d = Duration::from_secs(secs).min(MAX_LOCKOUT);
-        e.locked_until = Some(Instant::now() + d);
-        d
     }
 
-    pub fn reset(&mut self, user: &str) {
-        self.map.remove(user);
+    /// Apply live policy changes (config reload).
+    pub fn set_policy(&mut self, enabled: bool, cap: Duration) {
+        self.enabled = enabled;
+        self.cap = cap;
     }
 
-    /// Drop every tracked user. Used on session-unlock / suspend-resume
-    /// so that stale entries from before the lock don't keep counting
-    /// against the user.
-    #[allow(dead_code)] // public API for future suspend/resume hook
-    pub fn clear_all(&mut self) {
-        self.map.clear();
+    fn entry(&mut self, key: &str) -> &mut Entry {
+        self.entries.entry(key.to_string()).or_insert(Entry {
+            failures: 0,
+            locked_until: None,
+        })
     }
 
-    /// Number of currently tracked users (mostly for tests/diagnostics).
-    #[allow(dead_code)] // used by tests
-    pub fn tracked_len(&self) -> usize {
-        self.map.len()
+    /// Remaining lock-out for a user, `None` if not locked / disabled.
+    /// Also prunes expired locks.
+    pub fn remaining(&mut self, user: &str) -> Option<(u64, Instant)> {
+        if !self.enabled {
+            return None;
+        }
+        let now = (self.now)();
+        let cap_secs = self.cap.as_secs();
+        let e = self.entry(user);
+        match e.locked_until {
+            Some(until) if until > now => {
+                let secs = (until - now).as_secs().max(1).min(cap_secs);
+                Some((secs, until))
+            }
+            Some(_) => {
+                e.locked_until = None;
+                None
+            }
+            None => None,
+        }
     }
 
-    /// Total failure count for one user (mostly for tests/diagnostics).
-    #[allow(dead_code)] // used by tests
-    pub fn failure_count(&self, user: &str) -> u32 {
-        self.map.get(user).map(|e| e.fails).unwrap_or(0)
+    /// Record a failed authentication: bumps the counter and (re)locks.
+    /// Returns the lock-out seconds the *next* attempt will face, for
+    /// surfacing as a `Throttle` event right after `AuthResult{ok:false}`.
+    pub fn record_failure(&mut self, user: &str, peer_key: &str) -> u64 {
+        if !self.enabled {
+            return 0;
+        }
+        let now = (self.now)();
+        let cap = self.cap;
+        for key in [user, peer_key] {
+            let e = self.entry(key);
+            e.failures = e.failures.saturating_add(1);
+            let secs = e.lockout_secs(cap);
+            e.locked_until = Some(now + Duration::from_secs(secs));
+        }
+        self.entry(user).lockout_secs(cap)
+    }
+
+    /// Record success: the user entry is cleared; the peer entry decays by
+    /// one (a healthy UI should not stay poisoned by one user's typos).
+    pub fn record_success(&mut self, user: &str, peer_key: &str) {
+        self.entries.remove(user);
+        if let Some(e) = self.entries.get_mut(peer_key) {
+            e.failures = e.failures.saturating_sub(1);
+            if e.failures == 0 {
+                e.locked_until = None;
+            }
+        }
+    }
+
+    /// Prune entries with expired locks (called opportunistically).
+    pub fn prune(&mut self) {
+        let now = (self.now)();
+        self.entries
+            .retain(|_, e| e.locked_until.map(|u| u > now).unwrap_or(e.failures > 0));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
-    fn free_then_escalating() {
-        let mut t = Throttle::default();
-        assert_eq!(t.record_failure("a"), Duration::ZERO);
-        assert_eq!(t.record_failure("a"), Duration::ZERO);
-        assert_eq!(t.record_failure("a"), Duration::from_secs(2));
-        assert_eq!(t.record_failure("a"), Duration::from_secs(4));
-        assert!(t.remaining("a").is_some());
-        t.reset("a");
-        assert!(t.remaining("a").is_none());
-    }
-
-    #[test]
-    fn capped() {
-        let mut t = Throttle::default();
-        for _ in 0..40 {
-            t.record_failure("a");
+    fn exponential_backoff_capped() {
+        let mut t = Throttle::new(true, Duration::from_secs(60));
+        assert_eq!(t.record_failure("alice", "u1000"), 1); // 1 failure → 1 s
+        assert_eq!(t.record_failure("alice", "u1000"), 2); // 2 → 2 s
+        assert_eq!(t.record_failure("alice", "u1000"), 4); // 3 → 4 s
+        assert_eq!(t.record_failure("alice", "u1000"), 8);
+        for _ in 0..10 {
+            t.record_failure("alice", "u1000");
         }
-        assert!(t.record_failure("a") <= MAX_LOCKOUT);
+        assert_eq!(t.record_failure("alice", "u1000"), 60); // capped
     }
 
     #[test]
-    fn failure_count_is_tracked() {
-        let mut t = Throttle::default();
-        assert_eq!(t.failure_count("u"), 0);
-        t.record_failure("u");
-        t.record_failure("u");
-        assert_eq!(t.failure_count("u"), 2);
-        assert_eq!(t.tracked_len(), 1);
-    }
-
-    #[test]
-    fn clear_all_drops_everyone() {
-        let mut t = Throttle::default();
-        t.record_failure("a");
-        t.record_failure("b");
-        assert_eq!(t.tracked_len(), 2);
-        t.clear_all();
-        assert_eq!(t.tracked_len(), 0);
-        assert!(t.remaining("a").is_none());
-    }
-
-    #[test]
-    fn unknown_users_share_one_entry() {
-        // Probing arbitrary usernames should not grow the map without
-        // bound — every unknown name collapses onto UNKNOWN_KEY in the
-        // caller, but even if the caller passes them through directly,
-        // the cap on MAX_TRACKED prevents runaway memory growth.
-        let mut t = Throttle::default();
-        for i in 0..MAX_TRACKED + 50 {
-            t.record_failure(&format!("probe{i}"));
+    fn remaining_counts_down_and_unlocks() {
+        use std::sync::{Arc, Mutex};
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let c2 = clock.clone();
+        let mut t =
+            Throttle::new(true, Duration::from_secs(60)).with_clock(move || *c2.lock().unwrap());
+        assert!(t.remaining("alice").is_none());
+        t.record_failure("alice", "u1000");
+        t.record_failure("alice", "u1000");
+        let (secs, until) = t.remaining("alice").unwrap();
+        assert!((1..=2).contains(&secs));
+        // advance past the lock (single lock scope — no re-entrancy)
+        {
+            let mut now = clock.lock().unwrap();
+            let delta = until.saturating_duration_since(*now) + Duration::from_secs(1);
+            *now += delta;
         }
-        // Either we hit the cap (≤ MAX_TRACKED) or we evicted expired
-        // entries to stay under it.
-        assert!(t.tracked_len() <= MAX_TRACKED + 1);
+        assert!(t.remaining("alice").is_none());
+    }
+
+    #[test]
+    fn success_resets_user_and_decays_peer() {
+        let mut t = Throttle::new(true, Duration::from_secs(60));
+        t.record_failure("alice", "peerA");
+        t.record_failure("alice", "peerA");
+        t.record_success("alice", "peerA");
+        assert!(t.remaining("alice").is_none());
+        // peer entry still has 1 failure → next failure on same peer locks 1s
+        assert_eq!(t.record_failure("bob", "peerA"), 1);
+    }
+
+    #[test]
+    fn disabled_is_transparent() {
+        let mut t = Throttle::new(false, Duration::from_secs(60));
+        assert_eq!(t.record_failure("alice", "p"), 0);
+        assert!(t.remaining("alice").is_none());
+    }
+
+    #[test]
+    fn per_user_isolation() {
+        let mut t = Throttle::new(true, Duration::from_secs(60));
+        t.record_failure("alice", "peerA");
+        t.record_failure("alice", "peerA");
+        assert!(t.remaining("bob").is_none());
     }
 }

@@ -1,14 +1,12 @@
 [package]
 name = "lion-greeter"
-version = "0.6.1"
+version = "0.1.0"
 edition = "2021"
-description = "LionOS login daemon: PAM authentication (conversation-forwarding, autologin), XDG session selection, logind user switching"
-license = "MIT"
-repository = "https://github.com/lionos-org/lion-greeter"
-homepage = "https://lionos.org/"
-keywords = ["lionos", "login", "pam", "greeter", "daemon"]
-categories = ["authentication", "os::linux-apis"]
-rust-version = "1.74"
+rust-version = "1.80"
+description = "LionOS login backend: user enumeration, PAM authentication, session launch (spec 01)"
+license = "MIT OR Apache-2.0"
+repository = "https://git.lionos.org/lion-greeter"
+publish = false
 
 [lib]
 name = "lion_greeter"
@@ -18,36 +16,41 @@ path = "src/lib.rs"
 name = "lion-greeter"
 path = "src/main.rs"
 
+[features]
+default = ["real-pam", "real-logind"]
+# dlopen(3)-based libpam backend + privileged launcher. Audited unsafe FFI lives in
+# `lion_greeter::pam::sys` and `lion_greeter::sysffi` only; every other module is
+# `#![forbid(unsafe_code)]`.
+real-pam = []
+# zbus calls to org.freedesktop.login1 (session registration, power actions).
+real-logind = ["dep:zbus"]
+
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-zbus = { version = "4", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
-thiserror = "1"
-anyhow = "1"
-# `release_max_level_info` compiles out `debug!`/`trace!` calls at the
-# call site in release builds (dev still sees everything). Smaller
-# binary, faster hot path, no churn in observability surface.
-tracing = { version = "0.1", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-users = "0.11"
+zeroize = { version = "1", features = ["zeroize_derive"] }
 libc = "0.2"
-zeroize = "1"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"], optional = true }
 
-[build-dependencies]
-# No build deps — the libpam link is resolved in build.rs by emitting
-# a direct `-l:libpam.so.0` flag (GNU ld `:` form) so we do not need
-# libpam-dev (the unversioned libpam.so symlink) installed.
+[dev-dependencies]
+tempfile = "3"
+
+[[example]]
+name = "greeter_client"
+path = "examples/greeter_client.rs"
+
+[[bench]]
+name = "lion_bench"
+path = "benches/lion_bench.rs"
+harness = false
 
 [profile.release]
-# Maximum optimization for a long-running root daemon.
-lto = "fat"           # whole-program LTO across all crates
-codegen-units = 1     # single CGU so the optimiser sees everything
-panic = "abort"       # no unwind tables; smaller binary + faster panic
-strip = "symbols"     # drop symbols (we keep build-id for crash reports)
-opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
 
-[profile.dev]
-opt-level = 0
-debug = 1
-incremental = true
+[profile.bench]
+debug = true

@@ -1,0 +1,40 @@
+# cargo-deny configuration for lion-greeter.
+# Run: cargo deny check
+[graph]
+targets = [{ triple = "x86_64-unknown-linux-gnu" }]
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+highlight = "all"
+deny = [
+  # No network/telemetry crates allowed in this component (privacy by default).
+  { crate = "reqwest" },
+  { crate = "ureq" },
+  { crate = "hyper" },
+  { crate = "isahc" },
+  { crate = "curl" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-org = { github = [] }

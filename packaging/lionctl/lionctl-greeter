@@ -1,0 +1,47 @@
+#!/bin/sh
+# lionctl greeter — admin subcommand for lion-greeter (spec 01 §9).
+#
+# usage: lionctl greeter <status|start|stop|restart|reload|check|version>
+
+set -eu
+
+CONFIG=${LION_GREETER_CONFIG:-/etc/lion/greeter.json}
+BINARY=$(command -v lion-greeter || echo /usr/bin/lion-greeter)
+
+cmd=${1:-status}
+case "$cmd" in
+    status)
+        systemctl status lion-greeter.service --no-pager
+        ;;
+    start)
+        systemctl start lion-greeter.service
+        ;;
+    stop)
+        systemctl stop lion-greeter.service
+        ;;
+    restart)
+        systemctl restart lion-greeter.service
+        ;;
+    reload)
+        # SIGHUP reloads config without dropping clients
+        systemctl kill -s HUP --kill-who=main lion-greeter.service
+        ;;
+    check)
+        exec "$BINARY" --check-config --config "$CONFIG"
+        ;;
+    version)
+        exec "$BINARY" --version
+        ;;
+    schema)
+        exec "$BINARY" --print-schema
+        ;;
+    socket)
+        # raw protocol access for debugging: see examples/greeter_client
+        echo "use: greeter_client list|sessions|auth USER|launch SESSION|power ACTION [SOCKET]"
+        exit 0
+        ;;
+    *)
+        echo "usage: lionctl greeter <status|start|stop|restart|reload|check|version|schema|socket>" >&2
+        exit 2
+        ;;
+esac

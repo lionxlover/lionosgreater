@@ -1,0 +1,21 @@
+# lion-greeter.socket — socket activation for the UI protocol socket.
+#
+# systemd creates the socket with exact ownership (root:lion-greeter,
+# 0660) before the daemon starts, and restarts the UI's connection
+# cleanly across greeter restarts. The daemon consumes fd 3 via
+# LISTEN_FDS (see sysffi::take_listen_fd).
+
+[Unit]
+Description=LionOS Greeter UI socket
+Before=lion-greeter.service
+
+[Socket]
+ListenStream=/run/lion-greeter/ui.sock
+SocketUser=root
+SocketGroup=lion-greeter
+SocketMode=0660
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
+RequiredBy=lion-greeter.service

@@ -1,0 +1,85 @@
+# lion-greeter.service — LionOS login backend (spec 01 §9)
+#
+# Privileged daemon: PAM authentication, logind session registration and
+# the setuid-exec handoff all require root. The *UI* is a separate,
+# unprivileged unit (lion-login-ui.service) that only talks to the
+# SO_PEERCRED-gated socket. Unit hardening follows spec 01 §9; every
+# capability listed below is required and justified in a comment.
+
+[Unit]
+Description=LionOS Greeter (login backend)
+Documentation=man:lion-greeter(8)
+After=systemd-logind.service dbus.socket
+Wants=systemd-logind.service
+# The display-manager alias makes this the DM for the default target
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+# READY=1 is only sent once the socket is bound and PAM is loaded
+# (fail closed before readiness — see main.rs).
+ExecStart=/usr/bin/lion-greeter
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=1
+# Watchdog: the daemon pings WATCHDOG=1 at WATCHDOG_USEC/2 when armed
+WatchdogSec=30s
+TimeoutStopSec=10
+
+# Socket activation: the socket unit creates /run/lion-greeter/ui.sock
+# with the right ownership before this service starts.
+Requires=lion-greeter.socket
+After=lion-greeter.socket
+
+# ── Hardening (spec 01 §9) ────────────────────────────────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+# The child chdir()s into the user's home before exec; read-only is enough.
+ProtectHome=read-only
+PrivateTmp=yes
+# PrivateDevices would hide /dev/dri etc. from the *session*, but devices
+# are opened by the compositor (lion-session), not by the greeter daemon —
+# so PrivateDevices stays on here; the session gets its own device access
+# via logind's TakeDevice.
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=no
+# Session children need SUID/SGID transitions (setuid/setgid at launch).
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Capabilities actually required (empty would break the mission):
+#   CAP_SETUID/CAP_SETGID  — drop privileges into the user's session
+#   CAP_CHOWN/CAP_DAC_OVERRIDE — socket dir + guest tmpfs ownership fixups
+#   CAP_SYS_ADMIN          — mount(2) tmpfs for guest sessions
+#   CAP_KILL               — SIGKILL a session child that failed to exec
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_DAC_OVERRIDE CAP_SYS_ADMIN CAP_KILL
+AmbientCapabilities=
+UMask=0077
+KeyringMode=private
+# State: per-user last-session store + autologin bookkeeping.
+ReadWritePaths=/var/lib/lion-greeter /run/lion-greeter
+# Config and PAM stacks are read-only inputs (ProtectSystem=strict).
+RuntimeDirectory=lion-greeter
+RuntimeDirectoryMode=0755
+StateDirectory=lion-greeter
+StateDirectoryMode=0700
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lion-greeter
+
+[Install]
+WantedBy=graphical.target
+Alias=display-manager.service

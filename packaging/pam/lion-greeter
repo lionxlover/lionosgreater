@@ -1,0 +1,15 @@
+# PAM stack for lion-greeter (spec 01 §3 Authentication).
+#
+# Full conversation support: password, expired-password change
+# (pam_unix), account lock-out (pam_faillock) — the greeter surfaces
+# faillock denials as `Throttle`/locked reasons over its UI socket.
+#
+# No session-* lines: the greeter registers the logind session itself
+# and execs lion-session as the user (see launch.rs).
+
+auth     required  pam_faillock.so preauth silent deny=4 unlock_time=120
+auth     required  pam_unix.so
+auth     optional  pam_fprintd.so   # fingerprint with automatic password fallback
+account  required  pam_faillock.so
+account  required  pam_unix.so
+password required  pam_unix.so      # expired-password change flow

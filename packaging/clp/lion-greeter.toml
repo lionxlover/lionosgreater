@@ -1,0 +1,96 @@
+# CLP package manifest for lion-greeter (spec 01 §13.2).
+#
+# CLP is the LionOS package manager. This manifest is the signed build
+# description: `clp build` consumes it, produces
+#   lion-greeter_0.1.0_amd64.clp        (binary package)
+#   lion-greeter-dbgsym_0.1.0_amd64.clp (debug-symbol companion)
+# and emits a minisign signature (.clp.sig) using the packaging key.
+
+[package]
+name        = "lion-greeter"
+version     = "0.1.0"
+summary     = "LionOS login backend (PAM auth, user enumeration, session launch)"
+description = """
+Privileged daemon implementing spec 01: a SO_PEERCRED-gated JSON-lines
+UI socket, full PAM conversation support (password, expired-password
+change, OTP), logind session registration and clean-environment exec of
+lion-session, plus autologin, timed login and tmpfs guest sessions.
+"""
+license    = "MIT OR Apache-2.0"
+arch       = "amd64"
+section    = "admin"
+priority   = "required"
+homepage   = "https://lionos.org"
+maintainer = "LionOS Packaging Team <packaging@lionos.org>"
+vendor     = "LionOS"
+
+[build]
+type       = "cargo"
+source     = "https://git.lionos.org/lion-greeter"
+target     = ["x86_64-unknown-linux-gnu"]
+profile    = "release"
+features   = ["real-pam", "real-logind"]
+lto        = "thin"
+reproducible = true
+# Fail the build on any new compiler warning (spec 01 §10).
+deny_warnings = true
+
+[build.checks]
+fmt         = true
+clippy      = "-D warnings"
+tests       = true
+audit       = true
+deny        = true
+fuzz_smoke  = { runs = 2000, target = "protocol" }
+
+[depends]
+# Runtime: Linux-PAM userland + systemd (logind). The libpam linkage is
+# dlopen(3)-based, so this is a loose dependency, not an ELF NEEDED.
+runtime = [
+    { name = "libc6",       cmp = ">=", version = "2.38" },
+    { name = "libpam0g",    cmp = ">=", version = "1.5" },
+    { name = "systemd",     cmp = ">=", version = "254" },
+]
+recommends = [
+    { name = "accountsservice" },  # richer user metadata
+    { name = "fprintd" },          # fingerprint prompt path
+]
+
+[users]
+system = [
+    { name = "lion-greeter", uid = "dynamic", comment = "LionOS greeter UI user",
+      home = "/nonexistent", shell = "/usr/sbin/nologin",
+      groups = ["lion-greeter"] },
+]
+
+[files]
+bin     = [ { src = "target/release/lion-greeter", dst = "/usr/bin/", mode = "0755" } ]
+man     = [ { src = "packaging/man/lion-greeter.8", dst = "/usr/share/man/man8/", mode = "0644" } ]
+systemd = [
+    { src = "packaging/lion-greeter.service", dst = "/usr/lib/systemd/system/", mode = "0644" },
+    { src = "packaging/lion-greeter.socket",  dst = "/usr/lib/systemd/system/", mode = "0644" },
+]
+pam     = [
+    { src = "packaging/pam/lion-greeter",            dst = "/etc/pam.d/", mode = "0644", conffile = true },
+    { src = "packaging/pam/lion-greeter-autologin",  dst = "/etc/pam.d/", mode = "0644", conffile = true },
+]
+config  = [
+    { src = "packaging/lion-config/greeter.schema.json", dst = "/usr/share/lion/schemas/", mode = "0644" },
+    { src = "packaging/lionctl/lionctl-greeter",         dst = "/usr/lib/lion/lionctl/", mode = "0755" },
+]
+examples = [ { src = "examples/greeter_client.rs", dst = "/usr/share/doc/lion-greeter/examples/" } ]
+docs     = [
+    { src = "README.md",       dst = "/usr/share/doc/lion-greeter/" },
+    { src = "DESIGN.md",       dst = "/usr/share/doc/lion-greeter/" },
+    { src = "docs/PROTOCOL.md", dst = "/usr/share/doc/lion-greeter/" },
+]
+
+[postinst]
+systemd_enable  = ["lion-greeter.socket"]
+systemd_restart = ["lion-greeter.service", "on-upgrade"]
+groups = ["lion-greeter", "lion-autologin"]
+
+[signing]
+method   = "minisign"
+key      = "packaging@lionos.org"
+symbols  = { split = "lion-greeter-dbgsym", policy = "auto" }
